@@ -1,0 +1,17 @@
+# Cloud & BigQuery Data Ingestion
+google-cloud-bigquery
+db-dtypes
+pyarrow
+python-dotenv
+
+# Data Manipulation
+pandas
+numpy
+
+# Data Visualization
+matplotlib
+seaborn
+
+# Machine Learning
+scikit-learn
+xgboost
