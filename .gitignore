@@ -218,3 +218,16 @@ __marimo__/
 
 # Streamlit
 .streamlit/secrets.toml
+
+# Raw and processed local datasets
+data/raw/*
+!data/raw/.gitkeep
+data/processed/*
+!data/processed/.gitkeep
+
+# GCP service account credentials
+*credentials*.json
+*service_account*.json
+*service-account*.json
+gcp_key*.json
+secrets/
