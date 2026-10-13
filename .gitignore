@@ -219,9 +219,11 @@ __marimo__/
 # Streamlit
 .streamlit/secrets.toml
 
-# Raw and processed local datasets
+# Raw, interim, and processed local datasets
 data/raw/*
 !data/raw/.gitkeep
+data/interim/*
+!data/interim/.gitkeep
 data/processed/*
 !data/processed/.gitkeep
 
