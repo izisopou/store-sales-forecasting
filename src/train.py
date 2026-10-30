@@ -73,8 +73,8 @@ def parse_args() -> argparse.Namespace:
       # Run validation on the default 16-day window (2017-07-31 to 2017-08-15):
       python src/train.py
 
-      # Backtest on a custom historical date and horizon:
-      python src/train.py --val-start-date 2017-05-01 --val-days 16
+      # Backtest on a holiday window and apply post-processing holiday rules:
+      python src/train.py --val-start-date 2016-12-20 --val-days 16 --apply-holiday-rules
 
       # Run default validation AND train final production models on 100%% of train data:
       python src/train.py --full-train
@@ -120,6 +120,11 @@ def parse_args() -> argparse.Namespace:
         action='store_true',
         help='Train models on 100%% of the training dataset and save them to --models-dir.',
     )
+    parser.add_argument(
+        '--apply-holiday-rules',
+        action='store_true',
+        help='Apply post-processing holiday rules to validation predictions (zero out closed stores on Dec 25 and Jan 1).',
+    )
     return parser.parse_args()
 
 
@@ -129,21 +134,51 @@ def split_train_dataset(
     target_col: str = TARGET_COL,
     val_start: str = DEFAULT_VAL_START_DATE,
     val_days: int = DEFAULT_VAL_DAYS,
-) -> tuple[pd.DataFrame, pd.Series, pd.DataFrame, pd.Series]:
+) -> tuple[pd.DataFrame, pd.Series, pd.DataFrame, pd.Series, pd.DataFrame, pd.DataFrame]:
     """Splits data chronologically into train and validation sets."""
     start_dt = pd.to_datetime(val_start)
     end_dt = start_dt + pd.Timedelta(days=val_days-1)
     
     date_range_train = df['date'] < start_dt
     date_range_validation = (df['date'] >= start_dt) & (df['date'] <= end_dt)
+
+    df_train_split = df.loc[date_range_train].reset_index(drop=True)
+    df_valid_split = df.loc[date_range_validation].reset_index(drop=True)
     
-    X_train = (df.loc[date_range_train, feature_cols]).reset_index(drop=True)
-    y_train = (df.loc[date_range_train, target_col]).reset_index(drop=True)
+    X_train = df_train_split[feature_cols]
+    y_train = df_train_split[target_col]
 
-    X_valid = (df.loc[date_range_validation, feature_cols]).reset_index(drop=True)
-    y_valid = (df.loc[date_range_validation, target_col]).reset_index(drop=True)
+    X_valid = df_valid_split[feature_cols]
+    y_valid = df_valid_split[target_col]
 
-    return X_train, y_train, X_valid, y_valid
+    return X_train, y_train, X_valid, y_valid, df_train_split, df_valid_split
+
+
+def get_holiday_rules_mask(
+    df_train_split: pd.DataFrame,
+    df_valid_split: pd.DataFrame,
+) -> pd.Series:
+    """Return a boolean mask of validation rows that should be zeroed out on Dec 25 and Jan 1."""
+    print('\n--- Computing Post-Processing Holiday Rules (Store Closures) ---')
+    valid_dates = pd.to_datetime(df_valid_split['date'])
+    train_dates = pd.to_datetime(df_train_split['date'])
+    zero_mask = pd.Series(False, index=df_valid_split.index)
+
+    # Zero out Dec 25 and Jan 1 for stores that are historically always closed on those dates
+    for month, day, label in [(12, 25, 'Dec 25'), (1, 1, 'Jan 1')]:
+        val_holiday_mask = (valid_dates.dt.month == month) & (valid_dates.dt.day == day)
+        if val_holiday_mask.any():
+            train_holiday = df_train_split[(train_dates.dt.month == month) & (train_dates.dt.day == day)]
+            store_max = train_holiday.groupby('store_nbr', observed=True)[TARGET_COL].max()
+            closed_stores = store_max[store_max == 0].index
+
+            rule1_mask = val_holiday_mask & df_valid_split['store_nbr'].isin(closed_stores)
+            zero_mask |= rule1_mask
+            print(f'[{label}] Zeroed out {rule1_mask.sum():,} rows across {len(closed_stores)} historically closed stores.')
+        else:
+            print(f'[{label}] No {label} dates present in validation horizon (0 rows modified).')
+
+    return zero_mask
 
 
 def evaluate_model(
@@ -257,12 +292,12 @@ def main() -> None:
     feature_cols = [col for col in df_train.columns if col not in IGNORE_COLS]
 
     # 1. Validation Step
-    X_train, y_train, X_valid, y_valid = split_train_dataset(
+    X_train, y_train, X_valid, y_valid, df_train_split, df_valid_split = split_train_dataset(
         df = df_train, 
         feature_cols = feature_cols, 
         target_col = TARGET_COL,
         val_start = args.val_start_date,
-        val_days=args.val_days
+        val_days=args.val_days,
     )
     print(
         f'Validation Split: Train={len(X_train):,} rows (< {val_start_dt.date()}) | '
@@ -276,18 +311,39 @@ def main() -> None:
             X_train=X_train,
             y_train=y_train,
             X_valid=X_valid,
-            y_valid=y_valid
+            y_valid=y_valid,
         )
         val_preds[model_name] = preds
 
-    # Compute Ensemble RMSLE if both models were evaluated
+    # Compute Raw Ensemble RMSLE if both models were evaluated
     if len(val_preds) > 1:
         total_weight = sum(ENSEMBLE_WEIGHTS[m] for m in val_preds)
         blended_preds = sum(
             val_preds[m] * (ENSEMBLE_WEIGHTS[m] / total_weight) for m in val_preds
         )
         ensemble_rmsle = root_mean_squared_error(y_valid, blended_preds)
-        print(f'\n>>> [ENSEMBLE] Validation RMSLE: {ensemble_rmsle:.5f} <<<')    
+        print(f'\n>>> [ENSEMBLE - RAW] Validation RMSLE: {ensemble_rmsle:.5f} <<<')  
+
+    # Optional Post-Processing Holiday Rules Evaluation
+    post_rule_metrics = {}
+    if args.apply_holiday_rules:
+        zero_mask = get_holiday_rules_mask(
+            df_train_split=df_train_split,
+            df_valid_split=df_valid_split,
+        )
+        for model_name, preds in val_preds.items():
+            adj_preds = preds.copy()
+            adj_preds.loc[zero_mask] = 0.0
+            adj_rmsle = root_mean_squared_error(y_valid, adj_preds)
+            post_rule_metrics[model_name] = float(adj_rmsle)
+            print(f'[{model_name.upper()} - HOLIDAY RULES] Validation RMSLE: {adj_rmsle:.5f}')
+
+        if len(val_preds) > 1:
+            adj_blended = blended_preds.copy()
+            adj_blended.loc[zero_mask] = 0.0
+            adj_ensemble_rmsle = root_mean_squared_error(y_valid, adj_blended)
+            post_rule_metrics['ensemble'] = float(adj_ensemble_rmsle)
+            print(f'>>> [ENSEMBLE - HOLIDAY RULES] Validation RMSLE: {adj_ensemble_rmsle:.5f} <<<')  
 
     # 2. Full Production Training Step (only if --full-train is passed)
     if args.full_train:
@@ -329,6 +385,9 @@ def main() -> None:
 
         if len(val_preds) > 1:
             metadata['validation_metrics_rmsle']['ensemble'] = float(ensemble_rmsle)
+
+        if post_rule_metrics:
+            metadata['validation_metrics_rmsle_holiday_rules'] = post_rule_metrics    
 
         metadata_filename = args.models_dir / 'model_metadata.json'
         with open(metadata_filename, 'w', encoding='utf-8') as f:

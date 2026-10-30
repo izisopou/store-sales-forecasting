@@ -1,13 +1,13 @@
 {
-    "created_at_utc": "2026-10-30T12:29:24.245598+00:00",
+    "created_at_utc": "2026-10-30T20:00:17.285285+00:00",
     "validation_window": {
         "start_date": "2017-07-31",
         "days": 16
     },
     "validation_metrics_rmsle": {
         "xgb": 0.39358291636334364,
-        "lgbm": 0.39202170257808466,
-        "ensemble": 0.3911296139643865
+        "lgbm": 0.39202170257808233,
+        "ensemble": 0.39112961396438495
     },
     "ensemble_weights": {
         "xgb": 0.38,
@@ -83,5 +83,10 @@
             "reg_lambda": 1.0165627777012725,
             "verbosity": -1
         }
+    },
+    "validation_metrics_rmsle_holiday_rules": {
+        "xgb": 0.39358291636334364,
+        "lgbm": 0.39202170257808233,
+        "ensemble": 0.39112961396438495
     }
 }
