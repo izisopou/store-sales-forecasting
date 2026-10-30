@@ -1,0 +1,87 @@
+{
+    "created_at_utc": "2026-10-30T12:29:24.245598+00:00",
+    "validation_window": {
+        "start_date": "2017-07-31",
+        "days": 16
+    },
+    "validation_metrics_rmsle": {
+        "xgb": 0.39358291636334364,
+        "lgbm": 0.39202170257808466,
+        "ensemble": 0.3911296139643865
+    },
+    "ensemble_weights": {
+        "xgb": 0.38,
+        "lgbm": 0.62
+    },
+    "features": {
+        "count": 31,
+        "columns": [
+            "store_nbr",
+            "family",
+            "onpromotion",
+            "city",
+            "state",
+            "store_type",
+            "cluster",
+            "holiday_name",
+            "transactions_lag16",
+            "transactions_lag16_rolling_mean_14",
+            "transactions_lag16_rolling_mean_28",
+            "transactions_lag16_rolling_std_14",
+            "transactions_lag16_rolling_std_28",
+            "year",
+            "month",
+            "dayofmonth",
+            "dayofweek",
+            "dayofyear",
+            "is_nyd",
+            "is_christmas",
+            "is_month_start_end",
+            "is_mid_payday",
+            "sales_log1p_lag16",
+            "sales_log1p_lag21",
+            "sales_log1p_lag28",
+            "sales_log1p_lag35",
+            "sales_dow_mean_3w",
+            "sales_log1p_lag21_rolling_mean_14",
+            "sales_log1p_lag21_rolling_mean_28",
+            "sales_log1p_lag21_rolling_std_14",
+            "sales_log1p_lag21_rolling_std_28"
+        ]
+    },
+    "hyperparameters": {
+        "xgb": {
+            "tree_method": "hist",
+            "enable_categorical": true,
+            "random_state": 42,
+            "n_jobs": 6,
+            "eval_metric": "rmse",
+            "n_estimators": 891,
+            "learning_rate": 0.0459538259120618,
+            "early_stopping_rounds": null,
+            "max_depth": 9,
+            "min_child_weight": 3,
+            "subsample": 0.7275724643417782,
+            "colsample_bytree": 0.7735963189343423,
+            "reg_alpha": 0.0219410979090902,
+            "reg_lambda": 0.0037815840498335
+        },
+        "lgbm": {
+            "objective": "regression",
+            "random_state": 42,
+            "n_jobs": 6,
+            "metric": "rmse",
+            "n_estimators": 1133,
+            "learning_rate": 0.0379715140145848,
+            "max_depth": -1,
+            "subsample_freq": 1,
+            "num_leaves": 235,
+            "min_child_samples": 11,
+            "subsample": 0.9877724173028624,
+            "colsample_bytree": 0.6804588926583752,
+            "reg_alpha": 0.8754015926417771,
+            "reg_lambda": 1.0165627777012725,
+            "verbosity": -1
+        }
+    }
+}

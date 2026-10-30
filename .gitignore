@@ -219,13 +219,14 @@ __marimo__/
 # Streamlit
 .streamlit/secrets.toml
 
-# Raw, interim, and processed local datasets
-data/raw/*
-!data/raw/.gitkeep
-data/interim/*
-!data/interim/.gitkeep
-data/processed/*
-!data/processed/.gitkeep
+# data and models: ignore all data files but track folder structures and .gitkeep files
+data/**
+models/**
+!data/**/
+!data/**/.gitkeep
+!models/**/
+!models/**/.gitkeep
+!models/model_metadata.json
 
 # GCP service account credentials
 *credentials*.json
