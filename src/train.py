@@ -20,7 +20,7 @@ DEFAULT_VAL_START_DATE = '2017-07-31'
 DEFAULT_VAL_DAYS = 16
 MAX_FORECAST_HORIZON = 16
 
-VAL_MAX_ESTIMATORS = 2000
+VAL_MAX_ESTIMATORS = 2500
 EARLY_STOPPING_ROUNDS = 50
 
 IGNORE_COLS = ['id', 'date', 'sales', 'sales_log1p']
@@ -187,7 +187,7 @@ def evaluate_model(
     y_train: pd.Series,
     X_valid: pd.DataFrame,
     y_valid: pd.Series,
-) -> tuple[float, pd.Series]:
+) -> tuple[float, pd.Series, int]:
     """Train a model on the train split with early stopping and evaluate on validation."""
     print(f'\n--- Evaluating {model_name.upper()} on validation split ---')
 
@@ -237,26 +237,33 @@ def evaluate_model(
         f'[{model_name.upper()}] Validation RMSLE: {val_rmsle:.5f} (Best Iteration: {best_iter})'
     )
 
-    return val_rmsle, preds_valid
+    return val_rmsle, preds_valid, int(best_iter)
 
 
 def train_full_model(
     model_name: str,
     X_full: pd.DataFrame,
     y_full: pd.Series,
-) -> xgb.XGBRegressor | lgb.LGBMRegressor:
-    """Train a model on 100% of the training data using locked-in best parameters."""
+    n_estimators: int | None = None,
+) -> tuple[xgb.XGBRegressor | lgb.LGBMRegressor, dict]:
+    """Train a model on 100% of the training data using best parameters and dynamic n_estimators."""
     if model_name == 'xgb':
+        params = XGB_BEST_PARAMS.copy()
+        if n_estimators is not None:
+            params['n_estimators'] = int(n_estimators)
         print(
-            f'\n--- Training full {model_name.upper()} (n_estimators={XGB_BEST_PARAMS["n_estimators"]}) ---'
+            f'\n--- Training full {model_name.upper()} (n_estimators={params["n_estimators"]}) ---'
         )
-        model = xgb.XGBRegressor(**XGB_BEST_PARAMS)
+        model = xgb.XGBRegressor(**params)
         model.fit(X_full, y_full, verbose=100)
     elif model_name == 'lgbm':
+        params = LGBM_BEST_PARAMS.copy()
+        if n_estimators is not None:
+            params['n_estimators'] = int(n_estimators)
         print(
-            f'\n--- Training full {model_name.upper()} (n_estimators={LGBM_BEST_PARAMS["n_estimators"]}) ---'
+            f'\n--- Training full {model_name.upper()} (n_estimators={params["n_estimators"]}) ---'
         )
-        model = lgb.LGBMRegressor(**LGBM_BEST_PARAMS)
+        model = lgb.LGBMRegressor(**params)
         model.fit(
             X_full,
             y_full,
@@ -265,7 +272,7 @@ def train_full_model(
     else:
         raise ValueError(f'Unsupported model: {model_name}')
 
-    return model
+    return model, params
 
 
 def main() -> None:
@@ -283,10 +290,12 @@ def main() -> None:
     # Validate date bounds dynamically against the loaded dataset
     val_start_dt = pd.to_datetime(args.val_start_date)
     val_end_dt = val_start_dt + pd.Timedelta(days=args.val_days - 1)
-    max_dataset_dt = df_train['date'].max()
-    if val_start_dt < pd.to_datetime('2013-07-01') or val_end_dt > max_dataset_dt:
+    min_dataset_dt = pd.to_datetime(df_train['date'].min())
+    max_dataset_dt = pd.to_datetime(df_train['date'].max())
+    if val_start_dt <= min_dataset_dt or val_end_dt > max_dataset_dt:
         raise ValueError(
-            f'Validation window [{val_start_dt.date()} to {val_end_dt.date()}] is out of bounds (allowed: 2013-07-01 to {max_dataset_dt.date()}).'
+            f'Validation window [{val_start_dt.date()} to {val_end_dt.date()}] is out of bounds '
+            f'for loaded dataset range [{min_dataset_dt.date()} to {max_dataset_dt.date()}].'
         )
 
     feature_cols = [col for col in df_train.columns if col not in IGNORE_COLS]
@@ -305,8 +314,9 @@ def main() -> None:
     )
 
     val_preds = {}
+    best_iters = {}
     for model_name in args.models:
-        _, preds = evaluate_model(
+        _, preds, best_iter = evaluate_model(
             model_name=model_name,
             X_train=X_train,
             y_train=y_train,
@@ -314,6 +324,7 @@ def main() -> None:
             y_valid=y_valid,
         )
         val_preds[model_name] = preds
+        best_iters[model_name] = best_iter
 
     # Compute Raw Ensemble RMSLE if both models were evaluated
     if len(val_preds) > 1:
@@ -347,18 +358,48 @@ def main() -> None:
 
     # 2. Full Production Training Step (only if --full-train is passed)
     if args.full_train:
+        is_default_val = (
+            args.val_start_date == DEFAULT_VAL_START_DATE
+            and args.val_days == DEFAULT_VAL_DAYS
+        )
+        if not is_default_val:
+            print(
+                f'\nCustom validation window was used ({args.val_start_date}). '
+                f'Running reference validation on [{DEFAULT_VAL_START_DATE}, {DEFAULT_VAL_DAYS} days] '
+                f'to determine optimal n_estimators for full training...'
+            )
+            X_tr_ref, y_tr_ref, X_val_ref, y_val_ref, _, _ = split_train_dataset(
+                df=df_train,
+                feature_cols=feature_cols,
+                target_col=TARGET_COL,
+                val_start=DEFAULT_VAL_START_DATE,
+                val_days=DEFAULT_VAL_DAYS,
+            )
+            for model_name in args.models:
+                _, _, ref_best_iter = evaluate_model(
+                    model_name=model_name,
+                    X_train=X_tr_ref,
+                    y_train=y_tr_ref,
+                    X_valid=X_val_ref,
+                    y_valid=y_val_ref,
+                )
+                best_iters[model_name] = ref_best_iter
+
         X_full = df_train[feature_cols].reset_index(drop=True)
         y_full = df_train[TARGET_COL].reset_index(drop=True)
         print(f'\nStarting full production training on {len(X_full):,} rows...')
 
         args.models_dir.mkdir(parents=True, exist_ok=True)
 
+        used_hyperparams = {}
         for model_name in args.models:
-            full_model = train_full_model(
+            full_model, model_params = train_full_model(
                 model_name=model_name,
                 X_full=X_full,
                 y_full=y_full,
+                n_estimators=best_iters[model_name],
             )
+            used_hyperparams[model_name] = model_params
             model_path = args.models_dir / f'{model_name}_model.joblib'
             joblib.dump(full_model, model_path)
             print(f'Saved {model_path.name} to {args.models_dir} successfully.')
@@ -377,17 +418,14 @@ def main() -> None:
                 'count': len(feature_cols),
                 'columns': feature_cols,
             },
-            'hyperparameters': {
-                'xgb': XGB_BEST_PARAMS,
-                'lgbm': LGBM_BEST_PARAMS,
-            },
+            'hyperparameters': used_hyperparams,
         }
 
         if len(val_preds) > 1:
             metadata['validation_metrics_rmsle']['ensemble'] = float(ensemble_rmsle)
 
         if post_rule_metrics:
-            metadata['validation_metrics_rmsle_holiday_rules'] = post_rule_metrics    
+            metadata['validation_metrics_rmsle_holiday_rules'] = post_rule_metrics
 
         metadata_filename = args.models_dir / 'model_metadata.json'
         with open(metadata_filename, 'w', encoding='utf-8') as f:
