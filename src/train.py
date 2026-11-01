@@ -16,7 +16,6 @@ PROJ_PATH = here()
 DEFAULT_INPUT_PATH = PROJ_PATH / 'data' / 'processed'
 DEFAULT_MODEL_PATH = PROJ_PATH / 'models'
 
-DEFAULT_VAL_START_DATE = '2017-07-31'
 DEFAULT_VAL_DAYS = 16
 MAX_FORECAST_HORIZON = 16
 
@@ -106,8 +105,8 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument(
         '--val-start-date',
         type=str,
-        default=DEFAULT_VAL_START_DATE,
-        help=f'Start date for the validation window (default: {DEFAULT_VAL_START_DATE}).',
+        default=None,
+        help='Start date for the validation window (default: auto-selects the last --val-days of train data).',
     )
     parser.add_argument(
         '--val-days',
@@ -132,7 +131,7 @@ def split_train_dataset(
     df: pd.DataFrame, 
     feature_cols: list[str], 
     target_col: str = TARGET_COL,
-    val_start: str = DEFAULT_VAL_START_DATE,
+    val_start: str = '',
     val_days: int = DEFAULT_VAL_DAYS,
 ) -> tuple[pd.DataFrame, pd.Series, pd.DataFrame, pd.Series, pd.DataFrame, pd.DataFrame]:
     """Splits data chronologically into train and validation sets."""
@@ -287,11 +286,19 @@ def main() -> None:
     print('Loading processed train_features.parquet dataset...')
     df_train = pd.read_parquet(args.input_dir / 'train_features.parquet')
 
-    # Validate date bounds dynamically against the loaded dataset
-    val_start_dt = pd.to_datetime(args.val_start_date)
-    val_end_dt = val_start_dt + pd.Timedelta(days=args.val_days - 1)
+    # Dynamically resolve validation window from dataset bounds if not explicitly provided
     min_dataset_dt = pd.to_datetime(df_train['date'].min())
     max_dataset_dt = pd.to_datetime(df_train['date'].max())
+    latest_val_start_dt = max_dataset_dt - pd.Timedelta(days=DEFAULT_VAL_DAYS - 1)
+
+    if args.val_start_date is None:
+        val_start_dt = max_dataset_dt - pd.Timedelta(days=args.val_days - 1)
+    else:
+        val_start_dt = pd.to_datetime(args.val_start_date)
+
+    val_end_dt = val_start_dt + pd.Timedelta(days=args.val_days - 1)
+    val_start_str = str(val_start_dt.date())
+
     if val_start_dt <= min_dataset_dt or val_end_dt > max_dataset_dt:
         raise ValueError(
             f'Validation window [{val_start_dt.date()} to {val_end_dt.date()}] is out of bounds '
@@ -302,14 +309,14 @@ def main() -> None:
 
     # 1. Validation Step
     X_train, y_train, X_valid, y_valid, df_train_split, df_valid_split = split_train_dataset(
-        df = df_train, 
-        feature_cols = feature_cols, 
-        target_col = TARGET_COL,
-        val_start = args.val_start_date,
+        df=df_train,
+        feature_cols=feature_cols,
+        target_col=TARGET_COL,
+        val_start=val_start_str,
         val_days=args.val_days,
     )
     print(
-        f'Validation Split: Train={len(X_train):,} rows (< {val_start_dt.date()}) | '
+        f'Validation Split: Train={len(X_train):,} rows ({min_dataset_dt.date()} to {(val_start_dt - pd.Timedelta(days=1)).date()}) | '
         f'Valid={len(X_valid):,} rows ({val_start_dt.date()} to {val_end_dt.date()})'
     )
 
@@ -358,21 +365,22 @@ def main() -> None:
 
     # 2. Full Production Training Step (only if --full-train is passed)
     if args.full_train:
-        is_default_val = (
-            args.val_start_date == DEFAULT_VAL_START_DATE
+        is_latest_holdout = (
+            val_start_dt == latest_val_start_dt
             and args.val_days == DEFAULT_VAL_DAYS
         )
-        if not is_default_val:
+        if not is_latest_holdout:
+            ref_val_start_str = str(latest_val_start_dt.date())
             print(
-                f'\nCustom validation window was used ({args.val_start_date}). '
-                f'Running reference validation on [{DEFAULT_VAL_START_DATE}, {DEFAULT_VAL_DAYS} days] '
+                f'\nCustom validation window was used ({val_start_str}, {args.val_days} days). '
+                f'Running reference validation on latest holdout [{ref_val_start_str}, {DEFAULT_VAL_DAYS} days] '
                 f'to determine optimal n_estimators for full training...'
             )
             X_tr_ref, y_tr_ref, X_val_ref, y_val_ref, _, _ = split_train_dataset(
                 df=df_train,
                 feature_cols=feature_cols,
                 target_col=TARGET_COL,
-                val_start=DEFAULT_VAL_START_DATE,
+                val_start=ref_val_start_str,
                 val_days=DEFAULT_VAL_DAYS,
             )
             for model_name in args.models:
@@ -407,7 +415,7 @@ def main() -> None:
         metadata = {
             'created_at_utc': datetime.now(timezone.utc).isoformat(),
             'validation_window': {
-                'start_date': args.val_start_date,
+                'start_date': val_start_str,
                 'days': args.val_days,
             },
             'validation_metrics_rmsle': {

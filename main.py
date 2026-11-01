@@ -19,7 +19,6 @@ DEFAULT_MODELS = ['xgb', 'lgbm']
 
 DEFAULT_MAX_GB_BILLED = 0.2
 DEFAULT_WARMUP_CUTOFF = '2013-03-01'
-DEFAULT_VAL_START_DATE = '2017-07-31'
 DEFAULT_VAL_DAYS = 16
 DEFAULT_OUTPUT_NAME = 'submission.csv'
 
@@ -131,8 +130,8 @@ def parse_args() -> argparse.Namespace:
     model_group.add_argument(
         '--val-start-date',
         type=str,
-        default=DEFAULT_VAL_START_DATE,
-        help=f'Start date for the validation window in train.py (default: {DEFAULT_VAL_START_DATE}).',
+        default=None,
+        help='Start date for the validation window in train.py (default: auto-selects latest --val-days of train data).',
     )
     model_group.add_argument(
         '--val-days',
@@ -234,11 +233,11 @@ def main() -> None:
             str(args.models_dir),
             '--models',
             *args.models,
-            '--val-start-date',
-            args.val_start_date,
             '--val-days',
             str(args.val_days),
         ]
+        if args.val_start_date is not None:
+            train_cmd.extend(['--val-start-date', args.val_start_date])
         if not args.val_only:
             train_cmd.append('--full-train')
         if apply_holiday_rules:
