@@ -12,13 +12,14 @@ This repository implements a production-grade demand forecasting pipeline using 
 ## Table of Contents
 
 1. [Environment Setup](#environment-setup)
-2. [Data Ingestion & Storage (BigQuery to Parquet)](#data-ingestion--storage-bigquery-to-parquet)
-3. [Feature Engineering Pipeline](#feature-engineering-pipeline)
-4. [Model Training & Validation Pipeline](#model-training--validation-pipeline)
-5. [Model Inference Pipeline](#model-inference-pipeline)
-6. [End-to-End Pipeline Orchestration](#end-to-end-pipeline-orchestration)
-7. [Empirical Analysis, Experimental Studies & Future Roadmap (v1.1.0)](#empirical-analysis-experimental-studies--future-roadmap-v110)
-8. [Repository Structure](#repository-structure)
+2. [Docker Environment Setup](#docker-environment-setup)
+3. [Data Ingestion & Storage (BigQuery to Parquet)](#data-ingestion--storage-bigquery-to-parquet)
+4. [Feature Engineering Pipeline](#feature-engineering-pipeline)
+5. [Model Training & Validation Pipeline](#model-training--validation-pipeline)
+6. [Model Inference Pipeline](#model-inference-pipeline)
+7. [End-to-End Pipeline Orchestration](#end-to-end-pipeline-orchestration)
+8. [Empirical Analysis, Experimental Studies & Future Roadmap (v1.1.0)](#empirical-analysis-experimental-studies--future-roadmap-v110)
+9. [Repository Structure](#repository-structure)
 
 
 ## Environment Setup
@@ -34,6 +35,51 @@ source .venv/bin/activate  # On Windows: .venv\Scripts\activate
 
 # Install dependencies
 pip install -r requirements.txt
+```
+
+## Docker Environment Setup
+
+As an alternative to a local virtual environment, the complete ingestion and training pipeline can be run inside an isolated container.
+
+### 1. Host Machine Prerequisites
+If you are deploying on a fresh Ubuntu workspace, install the Docker engine and the Buildx CLI component:
+```bash
+sudo apt-get update && sudo apt-get install -y docker.io docker-buildx
+sudo usermod -aG docker $USER
+newgrp docker
+```
+*Note: To apply group permissions permanently across future sessions without typing `newgrp docker`, log out of your system user session and log back in.*
+
+Ensure BuildKit is exported as your active runtime compiler engine:
+```bash
+echo "export DOCKER_BUILDKIT=1" >> ~/.bashrc && source ~/.bashrc
+```
+
+### 2. Build the Production Image
+Compile the container image from the project root. This only needs to be run once unless dependencies or python scripts change:
+```bash
+docker build -t store-sales-forecasting:latest .
+```
+
+### 3. Pipeline Container Execution
+Run the end-to-end forecasting pipeline. The `-it` flags run the container interactively, allowing you to stop the pipeline instantly using `Ctrl+C`.
+
+```bash
+# Option A: Run from local interim Parquet files (features -> train -> predict)
+docker run --rm -it \
+  -v "$(pwd)/data:/app/data" \
+  -v "$(pwd)/models:/app/models" \
+  store-sales-forecasting:latest \
+  --steps features train predict --output-name submission_docker.csv
+
+# Option B: Run full end-to-end pipeline including BigQuery extraction (requires .env and gcloud auth)
+docker run --rm -it \
+  --env-file .env \
+  -v "$HOME/.config/gcloud:/root/.config/gcloud" \
+  -v "$(pwd)/data:/app/data" \
+  -v "$(pwd)/models:/app/models" \
+  store-sales-forecasting:latest \
+  --steps extract features train predict --output-name submission_docker.csv
 ```
 
 ## Data Ingestion & Storage (BigQuery to Parquet)
@@ -280,13 +326,14 @@ While the ensemble achieves **`0.39113` RMSLE** on the early-August validation w
 
 ```text
 store-sales-forecasting/
+├── .github/workflows/        # CI/CD automation pipelines (GitHub Actions)
 ├── assets/                   # Plots and figures for documentation (SHAP, ensemble curves)
 ├── data/
 │   ├── raw/                  # Original competition CSVs (untracked)
 │   ├── interim/              # BigQuery extracted Parquet tables (train, test, transactions)
 │   ├── processed/            # Engineered feature matrices (train_features, test_features)
 │   └── predictions/          # Generated model submissions (submission.csv)
-├── models/                   # Serialized production models (.joblib) & model_metadata.json
+├── models/                   # Serialized trained models (.joblib) & model_metadata.json
 ├── notebooks/
 │   ├── 01_raw_data_inspection.ipynb
 │   ├── 02_eda_fe.ipynb
@@ -299,9 +346,12 @@ store-sales-forecasting/
 │   ├── build_features.py     # Step 2: Grid validation, closure imputation & feature engineering
 │   ├── train.py              # Step 3: Out-of-time validation, dynamic refit & holiday rules
 │   └── predict.py            # Step 4: Schema validation, ensemble blending & inference
+├── .dockerignore             # Files excluded from the Docker build
 ├── .env.example              # Template for environment variables (GCP_PROJECT_ID)
+├── .gitattributes            # Repository language overrides for GitHub Linguist
 ├── .gitignore                # Git ignore rules for data artifacts, models, and virtualenvs
+├── Dockerfile                # Instructions for building the Docker image
+├── README.md                 # Project documentation
 ├── main.py                   # End-to-end CLI pipeline orchestrator (subprocess isolated)
-├── requirements.txt          # Python package dependencies
-└── README.md                 # Project documentation and empirical analysis
+└── requirements.txt          # Python package dependencies
 ```

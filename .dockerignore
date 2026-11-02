@@ -1,0 +1,17 @@
+# Git & Virtual Environments
+.git
+.gitignore
+.github
+.venv
+venv
+__pycache__/
+*.pyc
+
+# Local environment secrets
+.env
+
+# Data, serialized models, notebooks & static assets
+data/
+models/
+notebooks/
+assets/
