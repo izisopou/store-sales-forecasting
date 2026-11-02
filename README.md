@@ -1,5 +1,7 @@
 # Store Sales - Time Series Forecasting
 
+[![Pipeline CI](https://github.com/izisopou/store-sales-forecasting/actions/workflows/ci.yaml/badge.svg)](https://github.com/izisopou/store-sales-forecasting/actions/workflows/ci.yaml)
+
 Predicting daily unit sales across 54 grocery stores and 33 product families for Kaggle's [Store Sales - Time Series Forecasting competition](https://www.kaggle.com/competitions/store-sales-time-series-forecasting/overview).
 
 This repository implements a production-grade demand forecasting pipeline using Google BigQuery and SQL for warehouse-level data extraction, Pandas for time-series feature engineering, and gradient boosted trees (XGBoost / LightGBM) for multi-step forecasting across a 16-day horizon.

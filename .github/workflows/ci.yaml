@@ -1,0 +1,103 @@
+name: Pipeline CI
+
+on:
+  push:
+    branches: [ "main" ]
+  pull_request:
+    branches: [ "main" ]
+
+jobs:
+  test-pipeline:
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: 1. Checkout Repository
+        uses: actions/checkout@v4
+
+      - name: 2. Set up Python 3.12
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+          cache: "pip"
+
+      - name: 3. Install System & Python Dependencies
+        run: |
+          sudo apt-get update && sudo apt-get install -y --no-install-recommends libgomp1
+          python -m pip install --upgrade pip
+          pip install -r requirements.txt
+
+      - name: 4. Syntax & Bytecode Compilation Check
+        run: |
+          python -m py_compile main.py src/extract_data.py src/build_features.py src/train.py src/predict.py
+
+      - name: 5. Verify CLI Entry Points
+        run: |
+          python main.py --help
+          python src/extract_data.py --help
+          python src/build_features.py --help
+          python src/train.py --help
+          python src/predict.py --help
+
+      - name: 6. End-to-End Pipeline Smoke Test (Synthetic Data)
+        run: |
+          python -c "
+          from pathlib import Path
+          import numpy as np
+          import pandas as pd
+
+          interim = Path('tmp_ci/interim')
+          interim.mkdir(parents=True, exist_ok=True)
+
+          train_dates = pd.date_range('2017-05-01', '2017-08-15', freq='D')
+          test_dates = pd.date_range('2017-08-16', '2017-08-31', freq='D')
+          stores = [1, 2]
+          families = ['AUTOMOTIVE', 'GROCERY I']
+
+          def make_grid(dates, is_train=True):
+              rows = []
+              idx = 0
+              for d in dates:
+                  for s in stores:
+                      for f in families:
+                          promo = int((d.day + s) % 5 == 0)
+                          row = {
+                              'id': idx,
+                              'date': d,
+                              'store_nbr': s,
+                              'family': f,
+                              'onpromotion': promo,
+                              'oil_price': 50.0,
+                              'city': 'Quito',
+                              'state': 'Pichincha',
+                              'store_type': 'D',
+                              'cluster': 13,
+                              'is_holiday': 0,
+                              'holiday_name': None,
+                          }
+                          if is_train:
+                              row['sales'] = float(20.0 + 15.0 * promo + 5.0 * s + (d.dayofweek * 2.0))
+                          rows.append(row)
+                          idx += 1
+              return pd.DataFrame(rows)
+
+          df_tr = make_grid(train_dates, is_train=True)
+          df_te = make_grid(test_dates, is_train=False)
+          df_tx = (
+              df_tr[['date', 'store_nbr']]
+              .drop_duplicates()
+              .assign(transactions=1500)
+          )
+
+          df_tr.to_parquet(interim / 'train.parquet', index=False)
+          df_te.to_parquet(interim / 'test.parquet', index=False)
+          df_tx.to_parquet(interim / 'transactions.parquet', index=False)
+          "
+          python main.py --steps features train predict \
+            --interim-dir tmp_ci/interim \
+            --processed-dir tmp_ci/processed \
+            --models-dir tmp_ci/models \
+            --predictions-dir tmp_ci/predictions \
+            --warmup-cutoff 2017-06-15 \
+            --output-name submission.csv
+          test -f tmp_ci/models/model_metadata.json
+          test -f tmp_ci/predictions/submission.csv
