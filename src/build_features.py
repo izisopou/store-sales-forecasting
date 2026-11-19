@@ -64,8 +64,8 @@ def clean_datasets(
     """Clean input datasets, drop unused raw columns, validate grid completeness,
     and insert missing full-closure dates (e.g. Christmas Day) in train.
     """    
-    # 1. Drop raw columns excluded in the modeling (oil_price, is_holiday)
-    cols_to_drop = ['oil_price', 'is_holiday']
+    # 1. Drop raw columns excluded in the modeling (is_holiday)
+    cols_to_drop = ['is_holiday']
     df_train = df_train.drop(columns=[c for c in cols_to_drop if c in df_train.columns])
     df_test = df_test.drop(columns=[c for c in cols_to_drop if c in df_test.columns])
 
@@ -127,6 +127,7 @@ def clean_datasets(
             .assign(
                 id=-1,
                 onpromotion=0,
+                oil_price=np.nan,
                 sales=0.0,
                 holiday_name=lambda x: np.where(
                     (x['date'].dt.month == 12) & (x['date'].dt.day == 25),
@@ -155,7 +156,22 @@ def clean_datasets(
 
     # 6. Fill non-holiday NaNs in holiday_name with 'None'
     df_train['holiday_name'] = df_train['holiday_name'].fillna('None')
-    df_test['holiday_name'] = df_test['holiday_name'].fillna('None')    
+    df_test['holiday_name'] = df_test['holiday_name'].fillna('None')  
+
+    # 7. Impute missing oil_price values across the full timeline and downcast to float32
+    oil_dates = (
+        pd.concat([df_train[['date', 'oil_price']], df_test[['date', 'oil_price']]])
+        .drop_duplicates(subset='date')
+        .sort_values('date')
+        .ffill()
+        .bfill()
+    )
+    oil_map = oil_dates.set_index('date')['oil_price']
+    df_train['oil_price'] = df_train['date'].map(oil_map).astype(np.float32)
+    df_test['oil_price'] = df_test['date'].map(oil_map).astype(np.float32)
+
+    df_train['onpromotion'] = df_train['onpromotion'].astype(np.float32)
+    df_test['onpromotion'] = df_test['onpromotion'].astype(np.float32)  
 
     return df_train, df_test, df_transactions
    
@@ -174,38 +190,134 @@ def add_calendar_and_event_features(df: pd.DataFrame) -> pd.DataFrame:
         is_mid_payday = lambda x: x['date'].dt.day.isin([15, 16]).astype('int8'),
     )
 
-def add_target_log_transform(df: pd.DataFrame) -> pd.DataFrame:
-    """Create the log1p-transformed target variable for RMSLE alignment."""
-    return df.assign(sales_log1p = lambda x: np.log1p(x['sales']))
-
-def add_sales_log1p_lag_features(df: pd.DataFrame) -> pd.DataFrame:
-    """Create leak-free lag and rolling mean/std features on log1p(sales)."""
+def add_promotion_features(df: pd.DataFrame) -> pd.DataFrame:
+    """Create promotional lags, rolling intensity, and signed/relative momentum features."""
     return (
         df
         .sort_values(by=['store_nbr', 'family', 'date'])
         .assign(
-            sales_log1p_lag16 = lambda x: x.groupby(['store_nbr', 'family'])['sales_log1p'].shift(16),
-            sales_log1p_lag21 = lambda x: x.groupby(['store_nbr', 'family'])['sales_log1p'].shift(21),
-            sales_log1p_lag28 = lambda x: x.groupby(['store_nbr', 'family'])['sales_log1p'].shift(28),
-            sales_log1p_lag35 = lambda x: x.groupby(['store_nbr', 'family'])['sales_log1p'].shift(35),
-            sales_dow_mean_3w = lambda df: (df['sales_log1p_lag21'] + df['sales_log1p_lag28'] + df['sales_log1p_lag35'])/3.0,
-            sales_log1p_lag21_rolling_mean_14 = lambda x: (
-                x.groupby(['store_nbr', 'family'])['sales_log1p_lag21'].transform(lambda s: s.rolling(window=14, min_periods=1).mean())
-            ),
-            sales_log1p_lag21_rolling_mean_28 = lambda x: (
-                x.groupby(['store_nbr', 'family'])['sales_log1p_lag21'].transform(lambda s: s.rolling(window=28, min_periods=1).mean())
-            ),
-            sales_log1p_lag21_rolling_std_14 = lambda x: (
-                x.groupby(['store_nbr', 'family'])['sales_log1p_lag21'].transform(lambda s: s.rolling(window=14, min_periods=1).std()).fillna(0.0)
-            ),
-            sales_log1p_lag21_rolling_std_28 = lambda x: (
-                x.groupby(['store_nbr', 'family'])['sales_log1p_lag21'].transform(lambda s: s.rolling(window=28, min_periods=1).std()).fillna(0.0)
-            )
+            onpromotion_lag7 = lambda x: x.groupby(['store_nbr', 'family'], sort=False)['onpromotion'].shift(7).astype(np.float32),
+            onpromotion_lag16 = lambda x: x.groupby(['store_nbr', 'family'], sort=False)['onpromotion'].shift(16).astype(np.float32),
+            onpromotion_lag21 = lambda x: x.groupby(['store_nbr', 'family'], sort=False)['onpromotion'].shift(21).astype(np.float32),
+            onpromotion_rolling_mean_7 = lambda x: (
+                x.groupby(['store_nbr', 'family'], sort=False)['onpromotion'].transform(lambda s: s.rolling(window=7, min_periods=1).mean())
+            ).astype(np.float32),
+            onpromotion_rolling_std_7 = lambda x: (
+                x.groupby(['store_nbr', 'family'], sort=False)['onpromotion'].transform(lambda s: s.rolling(window=7, min_periods=1).std())
+            ).fillna(0.0).astype(np.float32),
+            onpromotion_rolling_mean_14 = lambda x: (
+                x.groupby(['store_nbr', 'family'], sort=False)['onpromotion'].transform(lambda s: s.rolling(window=14, min_periods=1).mean())
+            ).astype(np.float32),
+            onpromotion_rolling_std_14 = lambda x: (
+                x.groupby(['store_nbr', 'family'], sort=False)['onpromotion'].transform(lambda s: s.rolling(window=14, min_periods=1).std())
+            ).fillna(0.0).astype(np.float32),
+            promo_diff_lag7 = lambda x: (x['onpromotion'] - x['onpromotion_lag7']).astype(np.float32),
+            promo_diff_lag16 = lambda x: (x['onpromotion'] - x['onpromotion_lag16']).astype(np.float32),
+            promo_diff_lag21 = lambda x: (x['onpromotion'] - x['onpromotion_lag21']).astype(np.float32),
+            promo_diff_mean_7 = lambda x: (x['onpromotion'] - x['onpromotion_rolling_mean_7']).astype(np.float32),
+            promo_rel_diff_mean_7 = lambda x: (
+                (x['onpromotion'] - x['onpromotion_rolling_mean_7']) / (x['onpromotion_rolling_mean_7'] + 1.0)
+            ).astype(np.float32),
+            promo_rel_diff_mean_14 = lambda x: (
+                (x['onpromotion'] - x['onpromotion_rolling_mean_14']) / (x['onpromotion_rolling_mean_14'] + 1.0)
+            ).astype(np.float32),
+        )
+    )
+
+def add_oil_features(df: pd.DataFrame) -> pd.DataFrame:
+    """Create macroeconomic oil features: 28-day rolling stats and MoM momentum."""
+    daily_oil = (
+        df[['date', 'oil_price']]
+        .drop_duplicates(subset='date')
+        .sort_values('date')
+        .reset_index(drop=True)
+        .assign(
+            oil_price_rolling_mean_28=lambda x: x['oil_price'].rolling(window=28, min_periods=1).mean().astype(np.float32),
+            oil_price_rolling_std_28=lambda x: x['oil_price'].rolling(window=28, min_periods=1).std().fillna(0.0).astype(np.float32),
+            oil_price_lag28=lambda x: x['oil_price'].shift(28),
+            oil_price_lag28_rolling_mean_28=lambda x: x['oil_price_rolling_mean_28'].shift(28),
+            oil_price_dev_ma28_pct=lambda x: (
+                (x['oil_price'] - x['oil_price_rolling_mean_28'])
+                / x['oil_price_rolling_mean_28'].replace(0, np.nan)
+            ).fillna(0.0).astype(np.float32),
+            oil_price_point_mom_pct=lambda x: (
+                (x['oil_price'] - x['oil_price_lag28'])
+                / x['oil_price_lag28'].replace(0, np.nan)
+            ).fillna(0.0).astype(np.float32),
+            oil_price_trend_mom_pct=lambda x: (
+                (x['oil_price_rolling_mean_28'] - x['oil_price_lag28_rolling_mean_28'])
+                / x['oil_price_lag28_rolling_mean_28'].replace(0, np.nan)
+            ).fillna(0.0).astype(np.float32),
+        )
+        .drop(columns=['oil_price_lag28', 'oil_price_lag28_rolling_mean_28', 'oil_price'])
+    )
+    return df.merge(daily_oil, on='date', how='left')
+
+def add_target_log_transform(df: pd.DataFrame) -> pd.DataFrame:
+    """Create the log1p-transformed target variable for RMSLE alignment."""
+    return df.assign(sales_log1p = lambda x: np.log1p(x['sales']).astype(np.float32))
+
+def add_sales_log1p_lag_features(df: pd.DataFrame) -> pd.DataFrame:
+    """Create leak-free short-term lags, rolling/EWMA metrics, annual lags, and hierarchical aggregations."""
+    return (
+        df
+        .sort_values(by=['store_nbr', 'family', 'date'])
+        .assign(
+            # 1. Point-in-time lags & 3-week aligned weekday baseline
+            sales_log1p_lag16 = lambda x: x.groupby(['store_nbr', 'family'], sort=False)['sales_log1p'].shift(16).astype(np.float32),
+            sales_log1p_lag21 = lambda x: x.groupby(['store_nbr', 'family'], sort=False)['sales_log1p'].shift(21).astype(np.float32),
+            sales_log1p_lag28 = lambda x: x.groupby(['store_nbr', 'family'], sort=False)['sales_log1p'].shift(28).astype(np.float32),
+            sales_log1p_lag35 = lambda x: x.groupby(['store_nbr', 'family'], sort=False)['sales_log1p'].shift(35).astype(np.float32),
+            sales_dow_mean_3w = lambda df: ((df['sales_log1p_lag21'] + df['sales_log1p_lag28'] + df['sales_log1p_lag35']) / 3.0).astype(np.float32),
+            # 2. Rolling statistics over lag21 (v1.0.0)
+            sales_log1p_lag21_rolling_mean_14 = lambda x: x.groupby(['store_nbr', 'family'], sort=False)['sales_log1p_lag21'].transform(
+                lambda s: s.rolling(window=14, min_periods=1).mean()
+            ).astype(np.float32),
+            sales_log1p_lag21_rolling_mean_28 = lambda x: x.groupby(['store_nbr', 'family'], sort=False)['sales_log1p_lag21'].transform(
+                lambda s: s.rolling(window=28, min_periods=1).mean()
+            ).astype(np.float32),
+            sales_log1p_lag21_rolling_std_14 = lambda x: x.groupby(['store_nbr', 'family'], sort=False)['sales_log1p_lag21'].transform(
+                lambda s: s.rolling(window=14, min_periods=1).std()
+            ).fillna(0.0).astype(np.float32),
+            sales_log1p_lag21_rolling_std_28 = lambda x: x.groupby(['store_nbr', 'family'], sort=False)['sales_log1p_lag21'].transform(
+                lambda s: s.rolling(window=28, min_periods=1).std()
+            ).fillna(0.0).astype(np.float32),
+            # 3. Rolling & EWMA statistics over lag16 + log-space momentum (v1.1.0)
+            sales_log1p_lag16_rolling_mean_7 = lambda x: x.groupby(['store_nbr', 'family'], sort=False)['sales_log1p_lag16'].transform(
+                lambda s: s.rolling(window=7, min_periods=1).mean()
+            ).astype(np.float32),
+            sales_log1p_lag16_rolling_mean_14 = lambda x: x.groupby(['store_nbr', 'family'], sort=False)['sales_log1p_lag16'].transform(
+                lambda s: s.rolling(window=14, min_periods=1).mean()
+            ).astype(np.float32),
+            sales_log1p_lag16_rolling_std_7 = lambda x: x.groupby(['store_nbr', 'family'], sort=False)['sales_log1p_lag16'].transform(
+                lambda s: s.rolling(window=7, min_periods=1).std()
+            ).fillna(0.0).astype(np.float32),
+            sales_log1p_lag16_rolling_std_14 = lambda x: x.groupby(['store_nbr', 'family'], sort=False)['sales_log1p_lag16'].transform(
+                lambda s: s.rolling(window=14, min_periods=1).std()
+            ).fillna(0.0).astype(np.float32),
+            sales_log1p_lag16_ewm_mean_7 = lambda x: x.groupby(['store_nbr', 'family'], sort=False)['sales_log1p_lag16'].transform(
+                lambda s: s.ewm(span=7, min_periods=1).mean()
+            ).astype(np.float32),
+            sales_log1p_lag16_ewm_mean_14 = lambda x: x.groupby(['store_nbr', 'family'], sort=False)['sales_log1p_lag16'].transform(
+                lambda s: s.ewm(span=14, min_periods=1).mean()
+            ).astype(np.float32),
+            sales_log1p_momentum_7_28 = lambda x: (x['sales_log1p_lag16_rolling_mean_7'] - x['sales_log1p_lag21_rolling_mean_28']).astype(np.float32),
+            # 4. Weekday-aligned 52-week (364-day) annual seasonal lags (v1.1.0)
+            sales_log1p_lag364 = lambda x: x.groupby(['store_nbr', 'family'], sort=False)['sales_log1p'].shift(364).astype(np.float32),
+            sales_log1p_lag364_rolling_mean_7 = lambda x: x.groupby(['store_nbr', 'family'], sort=False)['sales_log1p_lag364'].transform(
+                lambda s: s.rolling(window=7, min_periods=1).mean()
+            ).astype(np.float32),
+            sales_log1p_lag364_rolling_std_7 = lambda x: x.groupby(['store_nbr', 'family'], sort=False)['sales_log1p_lag364'].transform(
+                lambda s: s.rolling(window=7, min_periods=1).std()
+            ).fillna(0.0).astype(np.float32),
+            # 5. Hierarchical Target Aggregations: Store-level & Regional (State x Family) (v1.1.0)
+            store_sales_log1p_lag16_rolling_mean_7 = lambda x: x.groupby(['date', 'store_nbr'], sort=False)['sales_log1p_lag16_rolling_mean_7'].transform('mean').astype(np.float32),
+            state_family_sales_log1p_lag16_rolling_mean_7 = lambda x: x.groupby(['date', 'state', 'family'], sort=False)['sales_log1p_lag16_rolling_mean_7'].transform('mean').astype(np.float32),
         )
     )
 
 def add_transactions_lag_features(df: pd.DataFrame, df_transactions: pd.DataFrame) -> pd.DataFrame:
-    """Create leak-free 16-day lag and rolling mean/std transaction features."""
+    """Create leak-free 16/21/28/35-day lag and rolling/EWM transaction features."""
     all_dates = pd.date_range(
         start=df['date'].min(),
         end=df['date'].max(),
@@ -231,26 +343,47 @@ def add_transactions_lag_features(df: pd.DataFrame, df_transactions: pd.DataFram
         .sort_values(by=['store_nbr', 'date'])
         .fillna(0)
         .assign(
-            transactions_lag16 = lambda df: df.groupby('store_nbr')['transactions'].shift(16),
+            transactions_lag16 = lambda df: df.groupby('store_nbr')['transactions'].shift(16).astype(np.float32),
+            transactions_lag21 = lambda df: df.groupby('store_nbr')['transactions'].shift(21).astype(np.float32),
+            transactions_lag28 = lambda df: df.groupby('store_nbr')['transactions'].shift(28).astype(np.float32),
+            transactions_lag35 = lambda df: df.groupby('store_nbr')['transactions'].shift(35).astype(np.float32),
+            transactions_lag16_rolling_mean_7 = lambda df: (
+                df.groupby('store_nbr')['transactions_lag16']
+                .transform(lambda s: s.rolling(7, min_periods=1).mean())
+                .astype(np.float32)
+            ),
             transactions_lag16_rolling_mean_14 = lambda df: (
-                df
-                .groupby('store_nbr')['transactions_lag16']
+                df.groupby('store_nbr')['transactions_lag16']
                 .transform(lambda s: s.rolling(14, min_periods=1).mean())
+                .astype(np.float32)
             ),
             transactions_lag16_rolling_mean_28 = lambda df: (
-                df
-                .groupby('store_nbr')['transactions_lag16']
+                df.groupby('store_nbr')['transactions_lag16']
                 .transform(lambda s: s.rolling(28, min_periods=1).mean())
+                .astype(np.float32)
+            ),
+            transactions_lag16_rolling_std_7 = lambda df: (
+                df.groupby('store_nbr')['transactions_lag16']
+                .transform(lambda s: s.rolling(7, min_periods=1).std())
+                .fillna(0.0)
+                .astype(np.float32)
             ),
             transactions_lag16_rolling_std_14 = lambda df: (
-                df
-                .groupby('store_nbr')['transactions_lag16']
-                .transform(lambda s: s.rolling(14, min_periods=1).std()).fillna(0.0)
+                df.groupby('store_nbr')['transactions_lag16']
+                .transform(lambda s: s.rolling(14, min_periods=1).std())
+                .fillna(0.0)
+                .astype(np.float32)
             ),
             transactions_lag16_rolling_std_28 = lambda df: (
-                df
-                .groupby('store_nbr')['transactions_lag16']
-                .transform(lambda s: s.rolling(28, min_periods=1).std()).fillna(0.0)
+                df.groupby('store_nbr')['transactions_lag16']
+                .transform(lambda s: s.rolling(28, min_periods=1).std())
+                .fillna(0.0)
+                .astype(np.float32)
+            ),
+            transactions_lag16_ewm_mean_7 = lambda df: (
+                df.groupby('store_nbr')['transactions_lag16']
+                .transform(lambda s: s.ewm(span=7, min_periods=1).mean())
+                .astype(np.float32)
             ),
         )
     )
@@ -285,6 +418,8 @@ def main() -> None:
         .sort_values(by=['store_nbr', 'family', 'date'])
         .pipe(add_transactions_lag_features, df_transactions=clean_df_transactions)
         .pipe(add_calendar_and_event_features)
+        .pipe(add_promotion_features)
+        .pipe(add_oil_features)
         .pipe(add_target_log_transform)
         .pipe(add_sales_log1p_lag_features)
     )

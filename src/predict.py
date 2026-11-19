@@ -21,8 +21,8 @@ IGNORE_COLS = ['id', 'date', 'sales', 'sales_log1p']
 
 DEFAULT_MODELS = ['xgb', 'lgbm']
 DEFAULT_ENSEMBLE_WEIGHTS = {
-    'xgb': 0.38,
-    'lgbm': 0.62,
+    'xgb': 0.37,
+    'lgbm': 0.63,
 }
 
 def parse_args() -> argparse.Namespace:

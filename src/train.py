@@ -19,7 +19,7 @@ DEFAULT_MODEL_PATH = PROJ_PATH / 'models'
 DEFAULT_VAL_DAYS = 16
 MAX_FORECAST_HORIZON = 16
 
-VAL_MAX_ESTIMATORS = 2500
+VAL_MAX_ESTIMATORS = 3500
 EARLY_STOPPING_ROUNDS = 50
 
 IGNORE_COLS = ['id', 'date', 'sales', 'sales_log1p']
@@ -27,42 +27,42 @@ TARGET_COL = 'sales_log1p'
 
 DEFAULT_MODELS = ['xgb', 'lgbm']
 ENSEMBLE_WEIGHTS = {
-    'xgb': 0.38,
-    'lgbm': 0.62,
+    'xgb': 0.37,
+    'lgbm': 0.63,
 }
 
 XGB_BEST_PARAMS = {
     'tree_method': 'hist',
     'enable_categorical': True,
     'random_state': 42,
-    'n_jobs': 6,
+    'n_jobs': 4,
     'eval_metric': 'rmse',
-    'n_estimators': 891, 
-    'learning_rate': 0.0459538259120618, 
+    'n_estimators': 2258, 
+    'learning_rate': 0.0281390311750703, 
     'early_stopping_rounds': None,
-    'max_depth': 9, 
-    'min_child_weight': 3, 
-    'subsample': 0.7275724643417782, 
-    'colsample_bytree': 0.7735963189343423, 
-    'reg_alpha': 0.0219410979090902, 
-    'reg_lambda': 0.0037815840498335,
+    'max_depth': 8, 
+    'min_child_weight': 5, 
+    'subsample': 0.9748464836183458, 
+    'colsample_bytree': 0.6918763168654188, 
+    'reg_alpha': 0.0069131281220106, 
+    'reg_lambda': 0.0579822263949799,
 }
 
 LGBM_BEST_PARAMS = {
     'objective': 'regression',
     'random_state': 42,
-    'n_jobs': 6,
+    'n_jobs': 4,
     'metric': 'rmse',
-    'n_estimators': 1133,
-    'learning_rate': 0.0379715140145848,
+    'n_estimators': 1359,
+    'learning_rate': 0.0331147582816181,
     'max_depth': -1, 
     'subsample_freq': 1,  
-    'num_leaves': 235, 
-    'min_child_samples': 11, 
-    'subsample': 0.9877724173028624, 
-    'colsample_bytree': 0.6804588926583752, 
-    'reg_alpha': 0.8754015926417771, 
-    'reg_lambda': 1.0165627777012725,
+    'num_leaves': 159, 
+    'min_child_samples': 79, 
+    'subsample': 0.9289904540281452, 
+    'colsample_bytree': 0.6938353495309986, 
+    'reg_alpha': 0.0415579630040895, 
+    'reg_lambda': 0.0012892824369351,
     'verbosity': -1,
 }
 

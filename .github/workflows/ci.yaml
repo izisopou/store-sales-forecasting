@@ -48,15 +48,17 @@ jobs:
           interim = Path('tmp_ci/interim')
           interim.mkdir(parents=True, exist_ok=True)
 
-          train_dates = pd.date_range('2017-05-01', '2017-08-15', freq='D')
+          # Span >1 year so 364-day annual lags and 28-day oil momentum are fully exercised
+          train_dates = pd.date_range('2016-06-01', '2017-08-15', freq='D')
           test_dates = pd.date_range('2017-08-16', '2017-08-31', freq='D')
-          stores = [1, 2]
-          families = ['AUTOMOTIVE', 'GROCERY I']
+          stores = [1, 2, 3, 4]
+          families = ['AUTOMOTIVE', 'GROCERY I', 'BEVERAGES']
 
           def make_grid(dates, is_train=True):
               rows = []
               idx = 0
               for d in dates:
+                  oil = float(50.0 + 3.0 * np.sin(d.dayofyear / 15.0))
                   for s in stores:
                       for f in families:
                           promo = int((d.day + s) % 5 == 0)
@@ -66,7 +68,7 @@ jobs:
                               'store_nbr': s,
                               'family': f,
                               'onpromotion': promo,
-                              'oil_price': 50.0,
+                              'oil_price': oil,
                               'city': 'Quito',
                               'state': 'Pichincha',
                               'store_type': 'D',
@@ -85,7 +87,7 @@ jobs:
           df_tx = (
               df_tr[['date', 'store_nbr']]
               .drop_duplicates()
-              .assign(transactions=1500)
+              .assign(transactions=lambda x: 1500 + (x['date'].dt.dayofweek * 100))
           )
 
           df_tr.to_parquet(interim / 'train.parquet', index=False)
@@ -101,3 +103,9 @@ jobs:
             --output-name submission.csv
           test -f tmp_ci/models/model_metadata.json
           test -f tmp_ci/predictions/submission.csv
+          python -c "
+          import json
+          meta = json.load(open('tmp_ci/models/model_metadata.json'))
+          assert meta['features']['count'] == 68, f\"Expected 68 features, got {meta['features']['count']}\"
+          print('CI Verification Passed: 68 features confirmed in model_metadata.json')
+          "
